@@ -297,28 +297,34 @@
                     }
                   },
                   {
-                    text: `You are an expert phlebotomist assistant. Analyze this image for venipuncture sites.
+                    text: `You are an expert phlebotomist with 20 years experience. Analyze this image thoroughly for ALL venipuncture sites.
 
-Respond with JSON only:
+IMPORTANT: Look carefully for ALL visible veins, not just the most obvious one. Check:
+- Inner elbow: median cubital, cephalic, basilic veins
+- Forearm: accessory cephalic, median antebrachial veins
+- Wrist/hand: dorsal venous network, metacarpal veins
+
+Even faint or subtle veins should be marked if they could potentially be used.
+
+Respond with JSON:
 {
-  "scene": "Brief description of what you see (e.g., 'Inner elbow of left arm, palm facing up, good lighting')",
+  "scene": "Brief description (body part, position, lighting quality)",
   "veins": [
     {
       "point": [y, x],
-      "name": "vein name (e.g., Median Cubital Vein)",
-      "description": "Short description - size, visibility, why good/bad for blood draw"
+      "name": "specific vein name",
+      "description": "size, visibility, suitability for blood draw"
     }
   ],
-  "recommendation": "Which numbered vein is best and why (1-2 sentences)"
+  "recommendation": "Which vein (#1) is best and brief explanation"
 }
 
-CRITICAL for coordinates:
-- "point" is the CENTER of where the needle should go [y, x]
-- Use 0-1000 scale normalized to image dimensions
-- Y comes first! [y, x] not [x, y]
-- Be precise - mark the exact spot on the vein
+COORDINATES:
+- "point" = exact needle insertion spot [y, x]
+- Scale: 0-1000 (normalized to image)
+- Y first! [y, x] not [x, y]
 
-List veins in order of preference (best first). Include 1-4 veins if visible.`
+List ALL visible veins (typically 2-5 in a good image), best first.`
                   }
                 ]
               }],
