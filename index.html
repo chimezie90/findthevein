@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vein Finder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0a2540;
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 1rem;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 1rem;
+      font-size: 1.5rem;
+    }
+    .camera-viewport {
+      position: relative;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      aspect-ratio: 4/3;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .hidden { display: none; }
+    .controls {
+      display: flex;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .capture-btn {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: 4px solid white;
+      background: transparent;
+      cursor: pointer;
+      padding: 4px;
+      transition: transform 0.1s;
+    }
+    .capture-btn:active {
+      transform: scale(0.95);
+    }
+    .capture-btn-inner {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: white;
+      transition: background 0.2s;
+    }
+    .capture-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .capture-btn.analyzing .capture-btn-inner {
+      background: #00e5cc;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .status {
+      text-align: center;
+      padding: 1rem;
+      min-height: 3rem;
+      font-size: 1rem;
+    }
+    .disclaimer {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      margin-top: auto;
+      line-height: 1.4;
+    }
+    .disclaimer strong {
+      color: #f59e0b;
+    }
+    .legend {
+      display: flex;
+      justify-content: center;
+      gap: 1.5rem;
+      padding: 0.5rem;
+      font-size: 0.875rem;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .legend-dot.primary { background: #00e5cc; }
+    .legend-dot.secondary { background: #6496ff; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Vein Finder</h1>
+
+    <div class="camera-viewport">
+      <video id="video" autoplay playsinline></video>
+      <canvas id="canvas" class="hidden"></canvas>
+    </div>
+
+    <div class="legend hidden" id="legend">
+      <div class="legend-item">
+        <span class="legend-dot primary"></span>
+        <span>Primary</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot secondary"></span>
+        <span>Secondary</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="capture-btn" class="capture-btn" disabled aria-label="Capture and analyze">
+        <span class="capture-btn-inner"></span>
+      </button>
+    </div>
+
+    <div id="status" class="status" role="status" aria-live="polite">Initializing camera...</div>
+
+    <div class="disclaimer">
+      <strong>For informational purposes only.</strong>
+      This tool provides visual guidance and is not a substitute for professional medical judgment.
+      Always verify vein selection through clinical assessment.
+    </div>
+  </div>
+
+  <script type="module">
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const captureBtn = document.getElementById('capture-btn');
+    const status = document.getElementById('status');
+    const legend = document.getElementById('legend');
+    const ctx = canvas.getContext('2d');
+
+    let stream = null;
+    let isAnalyzing = false;
+    let currentRequestId = 0;
+
+    // Get API key from localStorage or prompt
+    let API_KEY = localStorage.getItem('gemini_key');
+    if (!API_KEY) {
+      API_KEY = prompt('Enter your Gemini API key:');
+      if (API_KEY) {
+        localStorage.setItem('gemini_key', API_KEY);
+      }
+    }
+
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1280 },
+            height: { ideal: 960 }
+          }
+        });
+        video.srcObject = stream;
+        await video.play();
+        captureBtn.disabled = false;
+        status.textContent = 'Ready. Tap to scan.';
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          status.textContent = 'Camera access denied. Please allow camera access and refresh.';
+        } else if (err.name === 'NotFoundError') {
+          status.textContent = 'No camera found. Please connect a camera.';
+        } else {
+          status.textContent = 'Camera error: ' + err.message;
+        }
+        console.error('Camera error:', err);
+      }
+    }
+
+    async function analyze() {
+      if (isAnalyzing || !API_KEY) {
+        if (!API_KEY) {
+          status.textContent = 'No API key. Refresh page to enter key.';
+        }
+        return;
+      }
+
+      isAnalyzing = true;
+      const requestId = ++currentRequestId;
+
+      captureBtn.disabled = true;
+      captureBtn.classList.add('analyzing');
+      status.textContent = 'Analyzing...';
+
+      // Capture frame
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
+      const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'image/jpeg',
+                      data: base64
+                    }
+                  },
+                  {
+                    text: `Analyze this image of a human arm/hand for venipuncture sites.
+Identify visible veins suitable for blood draw.
+Return ONLY valid JSON (no markdown):
+{
+  "veins": [
+    {
+      "name": "vein name (e.g., median cubital, cephalic, basilic)",
+      "box": [ymin, xmin, ymax, xmax],
+      "recommendation": "primary" or "secondary",
+      "confidence": 0.0-1.0
+    }
+  ],
+  "notes": "any relevant observations"
+}
+Coordinates are 0-1000 scale normalized to image dimensions.
+Box format is [ymin, xmin, ymax, xmax] (y-first).
+Mark the best venipuncture site as "primary".`
+                  }
+                ]
+              }],
+              generationConfig: {
+                temperature: 0.1,
+                maxOutputTokens: 1024
+              }
+            })
+          }
+        );
+
+        // Check if this request is still current
+        if (requestId !== currentRequestId) {
+          return; // Stale request, ignore
+        }
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error?.message || `API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+        // Extract JSON from response
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const result = JSON.parse(jsonMatch[0]);
+          const veins = result.veins || [];
+
+          if (veins.length > 0) {
+            drawAnnotations(veins);
+            video.classList.add('hidden');
+            canvas.classList.remove('hidden');
+            legend.classList.remove('hidden');
+            status.textContent = `Found ${veins.length} vein${veins.length > 1 ? 's' : ''}. Tap to scan again.`;
+            if (result.notes) {
+              console.log('Notes:', result.notes);
+            }
+          } else {
+            status.textContent = 'No veins detected. Try better lighting or arm position.';
+          }
+        } else {
+          console.log('Raw response:', text);
+          status.textContent = 'Could not parse response. Try again.';
+        }
+      } catch (err) {
+        if (requestId !== currentRequestId) return;
+
+        console.error('Analysis error:', err);
+        if (err.message.includes('API_KEY')) {
+          status.textContent = 'Invalid API key. Clear localStorage and refresh.';
+        } else {
+          status.textContent = 'Analysis failed: ' + err.message;
+        }
+      } finally {
+        if (requestId === currentRequestId) {
+          isAnalyzing = false;
+          captureBtn.disabled = false;
+          captureBtn.classList.remove('analyzing');
+        }
+      }
+    }
+
+    function drawAnnotations(veins) {
+      // Sort so primary veins are drawn last (on top)
+      const sorted = [...veins].sort((a, b) => {
+        if (a.recommendation === 'primary') return 1;
+        if (b.recommendation === 'primary') return -1;
+        return 0;
+      });
+
+      sorted.forEach((vein, i) => {
+        const [ymin, xmin, ymax, xmax] = vein.box || [0, 0, 0, 0];
+
+        // Convert from 0-1000 normalized to canvas pixels
+        const x = (xmin / 1000) * canvas.width;
+        const y = (ymin / 1000) * canvas.height;
+        const w = ((xmax - xmin) / 1000) * canvas.width;
+        const h = ((ymax - ymin) / 1000) * canvas.height;
+
+        const isPrimary = vein.recommendation === 'primary';
+        const color = isPrimary ? '#00e5cc' : '#6496ff';
+
+        // Draw glow effect
+        ctx.shadowColor = color;
+        ctx.shadowBlur = isPrimary ? 20 : 10;
+
+        // Draw filled box with transparency
+        ctx.fillStyle = isPrimary ? 'rgba(0, 229, 204, 0.25)' : 'rgba(100, 150, 255, 0.15)';
+        ctx.fillRect(x, y, w, h);
+
+        // Draw border
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isPrimary ? 3 : 2;
+        ctx.strokeRect(x, y, w, h);
+
+        // Reset shadow for text
+        ctx.shadowBlur = 0;
+
+        // Draw center marker
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, isPrimary ? 20 : 16, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        // Draw number
+        ctx.fillStyle = '#0a2540';
+        ctx.font = `bold ${isPrimary ? 16 : 14}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(i + 1), cx, cy);
+
+        // Draw vein name label
+        if (vein.name) {
+          const labelY = y - 8;
+          ctx.fillStyle = color;
+          ctx.font = '12px system-ui, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(vein.name, x, labelY > 12 ? labelY : y + h + 16);
+        }
+      });
+    }
+
+    function reset() {
+      video.classList.remove('hidden');
+      canvas.classList.add('hidden');
+      legend.classList.add('hidden');
+      status.textContent = 'Ready. Tap to scan.';
+    }
+
+    captureBtn.addEventListener('click', () => {
+      if (canvas.classList.contains('hidden')) {
+        analyze();
+      } else {
+        reset();
+      }
+    });
+
+    // Start camera on load
+    startCamera();
+  </script>
+</body>
+</html>
