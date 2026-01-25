@@ -243,7 +243,8 @@
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0);
 
-      const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      // Higher quality image for better vein detection
+      const base64 = canvas.toDataURL('image/png').split(',')[1];
 
       try {
         const response = await fetch(
@@ -256,34 +257,46 @@
                 parts: [
                   {
                     inlineData: {
-                      mimeType: 'image/jpeg',
+                      mimeType: 'image/png',
                       data: base64
                     }
                   },
                   {
-                    text: `Analyze this image of a human arm/hand for venipuncture sites.
-Identify visible veins suitable for blood draw.
-Return ONLY valid JSON (no markdown):
+                    text: `You are an expert phlebotomist assistant. Look carefully at this image of a human arm or hand.
+
+Your task: Identify all visible veins that would be suitable for venipuncture (blood draw).
+
+First, study the image carefully:
+- Look for the bluish/greenish lines under the skin
+- Check the inner elbow (antecubital fossa) for median cubital, cephalic, and basilic veins
+- Check the forearm and back of hand for visible veins
+- Consider skin tone and lighting conditions
+
+Then provide your findings as JSON with this structure:
 {
   "veins": [
     {
-      "name": "vein name (e.g., median cubital, cephalic, basilic)",
+      "name": "specific vein name",
       "box": [ymin, xmin, ymax, xmax],
       "recommendation": "primary" or "secondary",
-      "confidence": 0.0-1.0
+      "reasoning": "why this vein is suitable"
     }
   ],
-  "notes": "any relevant observations"
+  "overall_assessment": "your assessment of vein visibility and recommendations"
 }
-Coordinates are 0-1000 scale normalized to image dimensions.
-Box format is [ymin, xmin, ymax, xmax] (y-first).
-Mark the best venipuncture site as "primary".`
+
+IMPORTANT for coordinates:
+- Use 0-1000 scale (normalized to image dimensions)
+- Format is [ymin, xmin, ymax, xmax] - Y comes first!
+- Draw boxes that tightly encompass each vein segment you identify
+
+Mark your best recommendation as "primary" - this should be the most visible, accessible vein with good size for needle insertion.`
                   }
                 ]
               }],
               generationConfig: {
-                temperature: 0.1,
-                maxOutputTokens: 1024
+                temperature: 0.4,
+                maxOutputTokens: 2048
               }
             }),
             signal: abortController.signal
@@ -299,7 +312,14 @@ Mark the best venipuncture site as "primary".`
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
         // Extract JSON from response
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        // Extract JSON from response (handle markdown code blocks)
+        let jsonText = text;
+        const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonText = codeBlockMatch[1];
+        }
+        const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+
         if (jsonMatch) {
           const result = JSON.parse(jsonMatch[0]);
           // Validate vein data
@@ -314,11 +334,20 @@ Mark the best venipuncture site as "primary".`
             video.classList.add('hidden');
             canvas.classList.remove('hidden');
             legend.classList.remove('hidden');
+
+            // Show assessment if available
+            const assessment = result.overall_assessment || '';
             status.textContent = `Found ${veins.length} vein${veins.length > 1 ? 's' : ''}. Tap to scan again.`;
+            if (assessment) {
+              console.log('Assessment:', assessment);
+            }
           } else {
-            status.textContent = 'No veins detected. Try better lighting or arm position.';
+            // Show the model's assessment even if no veins found
+            const assessment = result.overall_assessment || 'No veins detected.';
+            status.textContent = assessment.substring(0, 100) + (assessment.length > 100 ? '...' : '');
           }
         } else {
+          console.log('Raw response:', text);
           status.textContent = 'Could not parse response. Try again.';
         }
       } catch (err) {
