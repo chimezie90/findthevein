@@ -165,7 +165,7 @@
 
     let stream = null;
     let isAnalyzing = false;
-    let currentRequestId = 0;
+    let abortController = null;
 
     // Get API key from localStorage or prompt
     let API_KEY = localStorage.getItem('gemini_key');
@@ -177,6 +177,13 @@
     }
 
     async function startCamera() {
+      // Release any existing stream first
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
@@ -186,7 +193,20 @@
           }
         });
         video.srcObject = stream;
+
+        // Wait for metadata to load
+        await new Promise((resolve, reject) => {
+          video.onloadedmetadata = resolve;
+          video.onerror = reject;
+        });
+
         await video.play();
+
+        // Verify dimensions are valid
+        if (video.videoWidth === 0 || video.videoHeight === 0) {
+          throw new Error('Video dimensions not available');
+        }
+
         captureBtn.disabled = false;
         status.textContent = 'Ready. Tap to scan.';
       } catch (err) {
@@ -202,15 +222,19 @@
     }
 
     async function analyze() {
-      if (isAnalyzing || !API_KEY) {
-        if (!API_KEY) {
-          status.textContent = 'No API key. Refresh page to enter key.';
-        }
+      if (isAnalyzing) return;
+      if (!API_KEY) {
+        status.textContent = 'No API key. Refresh page to enter key.';
         return;
       }
 
+      // Cancel any previous request
+      if (abortController) {
+        abortController.abort();
+      }
+      abortController = new AbortController();
+
       isAnalyzing = true;
-      const requestId = ++currentRequestId;
 
       captureBtn.disabled = true;
       captureBtn.classList.add('analyzing');
@@ -263,14 +287,10 @@ Mark the best venipuncture site as "primary".`
                 temperature: 0.1,
                 maxOutputTokens: 1024
               }
-            })
+            }),
+            signal: abortController.signal
           }
         );
-
-        // Check if this request is still current
-        if (requestId !== currentRequestId) {
-          return; // Stale request, ignore
-        }
 
         if (!response.ok) {
           const errorData = await response.json();
@@ -284,7 +304,12 @@ Mark the best venipuncture site as "primary".`
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const result = JSON.parse(jsonMatch[0]);
-          const veins = result.veins || [];
+          // Validate vein data
+          const veins = (result.veins || []).filter(v =>
+            typeof v.name === 'string' &&
+            Array.isArray(v.box) && v.box.length === 4 &&
+            v.box.every(n => typeof n === 'number' && n >= 0 && n <= 1000)
+          );
 
           if (veins.length > 0) {
             drawAnnotations(veins);
@@ -292,31 +317,23 @@ Mark the best venipuncture site as "primary".`
             canvas.classList.remove('hidden');
             legend.classList.remove('hidden');
             status.textContent = `Found ${veins.length} vein${veins.length > 1 ? 's' : ''}. Tap to scan again.`;
-            if (result.notes) {
-              console.log('Notes:', result.notes);
-            }
           } else {
             status.textContent = 'No veins detected. Try better lighting or arm position.';
           }
         } else {
-          console.log('Raw response:', text);
           status.textContent = 'Could not parse response. Try again.';
         }
       } catch (err) {
-        if (requestId !== currentRequestId) return;
-
+        if (err.name === 'AbortError') {
+          return; // Request was cancelled, do nothing
+        }
         console.error('Analysis error:', err);
-        if (err.message.includes('API_KEY')) {
-          status.textContent = 'Invalid API key. Clear localStorage and refresh.';
-        } else {
-          status.textContent = 'Analysis failed: ' + err.message;
-        }
+        status.textContent = 'Analysis failed. Please try again.';
       } finally {
-        if (requestId === currentRequestId) {
-          isAnalyzing = false;
-          captureBtn.disabled = false;
-          captureBtn.classList.remove('analyzing');
-        }
+        isAnalyzing = false;
+        captureBtn.disabled = false;
+        captureBtn.classList.remove('analyzing');
+        abortController = null;
       }
     }
 
@@ -391,10 +408,27 @@ Mark the best venipuncture site as "primary".`
     }
 
     captureBtn.addEventListener('click', () => {
+      if (isAnalyzing) return; // Prevent double-clicks
+
       if (canvas.classList.contains('hidden')) {
         analyze();
       } else {
         reset();
+      }
+    });
+
+    // Clean up camera stream on page hide/unload
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
     });
 
