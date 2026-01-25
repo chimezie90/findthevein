@@ -167,13 +167,11 @@
     let isAnalyzing = false;
     let abortController = null;
 
-    // Get API key from localStorage or prompt
-    let API_KEY = localStorage.getItem('gemini_key');
-    if (!API_KEY) {
-      API_KEY = prompt('Enter your Gemini API key:');
-      if (API_KEY) {
-        localStorage.setItem('gemini_key', API_KEY);
-      }
+    // Get API key from localStorage or use default for testing
+    const DEFAULT_KEY = 'AIzaSyBLcDn54z_tfZApBrXN3wfAIQ0P-nVP0xI';
+    let API_KEY = localStorage.getItem('gemini_key') || DEFAULT_KEY;
+    if (!localStorage.getItem('gemini_key')) {
+      localStorage.setItem('gemini_key', API_KEY);
     }
 
     async function startCamera() {
