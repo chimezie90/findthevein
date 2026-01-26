@@ -12,7 +12,12 @@ export default {
     }
 
     if (request.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+      return new Response("Method not allowed", {
+        status: 405,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
     }
 
     try {
