@@ -16,7 +16,7 @@ A single-file web app that uses the device camera and Google's Gemini AI to iden
 
 ### 2. Gemini API Integration
 - Model: `gemini-2.0-flash`
-- Direct REST API calls via fetch() - no SDK needed
+- Calls go through Cloudflare Worker proxy (API key secured)
 - PNG format for lossless image quality (better than JPEG for vein detection)
 
 ### 3. Prompt Engineering Learnings
@@ -24,13 +24,15 @@ A single-file web app that uses the device camera and Google's Gemini AI to iden
 - Low temperature (0.1) - too restrictive
 - Forcing JSON immediately - constrained model's reasoning
 - Asking for bounding boxes - resulted in oversized annotations
+- Being too eager to find veins - hallucinated veins on clothing
 
 **What works:**
-- Expert persona ("phlebotomist with 20 years experience")
-- Explicit list of vein types to look for
+- Expert persona ("phlebotomist")
+- **Checking for bare skin first** - critical to avoid false positives
 - Point coordinates [y, x] instead of bounding boxes
 - Temperature 0.4 for better detection
-- Emphasizing "find ALL veins, even faint ones"
+- Being conservative - only mark veins that are clearly visible
+- Allowing "unspecified vein" instead of requiring exact names
 
 ### 4. Coordinate System
 **CRITICAL:** Gemini returns coordinates as `[y, x]` (Y-first), not `[x, y]`
@@ -47,42 +49,57 @@ A single-file web app that uses the device camera and Google's Gemini AI to iden
 ## Current Prompt
 
 ```
-You are an expert phlebotomist with 20 years experience. Analyze this image thoroughly for ALL venipuncture sites.
+You are an expert phlebotomist. Analyze this image for veins suitable for blood draws.
 
-IMPORTANT: Look carefully for ALL visible veins, not just the most obvious one. Check:
-- Inner elbow: median cubital, cephalic, basilic veins
-- Forearm: accessory cephalic, median antebrachial veins
-- Wrist/hand: dorsal venous network, metacarpal veins
+CRITICAL - First check:
+1. Is bare skin actually visible? (not clothing, fabric, or other materials)
+2. Can you see actual veins as blue/green lines under the skin?
 
-Even faint or subtle veins should be marked if they could potentially be used.
+If NO bare skin is visible, or you cannot see actual veins, return:
+{"scene": "description of what you see", "veins": [], "recommendation": "No visible veins - please show bare skin with good lighting"}
 
-Respond with JSON:
+Only mark veins you can ACTUALLY SEE - do not guess or hallucinate.
+
+If veins ARE visible, respond with JSON:
 {
-  "scene": "Brief description (body part, position, lighting quality)",
+  "scene": "Brief description (body part, lighting quality)",
   "veins": [
     {
       "point": [y, x],
-      "name": "specific vein name",
-      "description": "size, visibility, suitability for blood draw"
+      "name": "vein name or 'unspecified vein'",
+      "description": "visibility and suitability"
     }
   ],
-  "recommendation": "Which vein (#1) is best and brief explanation"
+  "recommendation": "Which vein is best for blood draw"
 }
+
+COORDINATES:
+- "point" = exact location of the vein [y, x]
+- Scale: 0-1000 (normalized to image)
+- Y first! [y, x] not [x, y]
+
+Be conservative - only mark veins you can clearly see.
 ```
 
 ## API Key Handling
 
-**Current (prototype):** API key hardcoded in index.html for easy mobile testing
-```javascript
-const DEFAULT_KEY = 'AIzaSyBLcDn54z_tfZApBrXN3wfAIQ0P-nVP0xI';
-```
+**Current (production-ready):** Cloudflare Worker proxy
+- App calls `https://vein-finder-proxy.chimezie90.workers.dev`
+- Worker holds Gemini API key as a secret (not in code)
+- CORS headers configured for cross-origin requests
 
-**For production:** Must use backend proxy to keep key secure
+**To update the Gemini API key:**
+```bash
+cd worker
+npx wrangler secret put GEMINI_API_KEY
+# Paste new key when prompted
+npx wrangler deploy
+```
 
 ## Known Issues / Future Improvements
 
-1. **API key exposed** - Need backend proxy for production
-2. **Rate limits** - Free tier can hit daily limits quickly
+1. ~~**API key exposed**~~ - Fixed with Cloudflare Worker proxy
+2. **Rate limits** - Free Gemini tier can hit daily limits quickly
 3. **Lighting dependent** - Works best with good lighting
 4. **Single image** - Could add video/continuous scanning mode
 
@@ -93,6 +110,9 @@ findthevein/
 ├── index.html          # Complete app (HTML + CSS + JS)
 ├── README.md           # User-facing documentation
 ├── CLAUDE.md           # This file - dev documentation
+├── worker/
+│   ├── index.js        # Cloudflare Worker (proxies Gemini API)
+│   └── wrangler.toml   # Worker configuration
 └── plans/
     └── feat-vein-finder-app.md  # Original plan with research
 ```
@@ -104,8 +124,10 @@ findthevein/
 ✅ Annotations redesigned (small circles + descriptions)
 ✅ Multi-vein detection enabled
 ✅ Scene description added for context
+✅ **Cloudflare Worker proxy deployed** (API key secured)
+✅ **Prompt improved** - checks for bare skin, conservative detection, allows unspecified veins
 
-**The app is fully functional.** User tested on iPhone Safari successfully.
+**The app is fully functional and production-ready.** API key is secure.
 
 ## Commands
 
@@ -113,6 +135,14 @@ findthevein/
 # Serve locally
 npx serve -s .
 
-# Deploy (auto via GitHub Pages on push to main)
+# Deploy app (auto via GitHub Pages on push to main)
 git push origin main
+
+# Deploy worker changes
+cd worker
+npx wrangler deploy
+
+# Update Gemini API key
+cd worker
+npx wrangler secret put GEMINI_API_KEY
 ```
